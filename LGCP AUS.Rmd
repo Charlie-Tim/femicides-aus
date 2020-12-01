@@ -1,0 +1,285 @@
+---
+title: "LGCP Queensland"
+author: "Anthony Timings, ID 663769672"
+date: "09/08/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE,message=FALSE,results='asis'}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE,cache = TRUE, message = FALSE,warning=FALSE)
+library(kableExtra)
+```
+
+```{r}
+library(stelfi)
+library(sf)
+library(raster)
+library(sp)
+library(raster)
+library(rgdal)
+
+```
+
+# Data & tidying
+
+```{r}
+ausdata <- read.csv("ausdata.csv")
+```
+
+```{r}
+aus <- raster::getData('GADM', country='AUS', level=1)
+class(aus)
+aus <- spTransform(aus, "+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+")
+```
+
+
+
+```{r}
+area_aus <- sum(raster::area(aus)) ## (m)
+area_auskm2 <- area_aus/1000^2 
+area_auskm2
+spatial_murder_rate_aus <- nrow(ausdata)/area_auskm2 
+temporal_murder_rate_aus <- nrow(ausdata)/length(table(ausdata$Year)) 
+st_murder_rate <- (nrow(ausdata)/area_auskm2)/length(table(ausdata$Year)) 
+```
+
+Transform `data.frame` to `SpatialPointsDataFrame`
+
+(EPSG:3112)
+https://gis.stackexchange.com/questions/268643/converting-australian-coordinates-epsg3112-for-mapping-in-r
+
+```{r sp}
+murders_aus_sp <- ausdata
+coordinates(murders_aus_sp) <- c("Longitude","Latitude")
+proj4string(murders_aus_sp) <- CRS("+proj=longlat +datum=WGS84")
+murders_aus_sp <-  spTransform(murders_aus_sp, 
+                           CRS("+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+"))
+```
+
+
+There are some points located in islands outside of Australia - we'll remove these
+
+```{r}
+x = c(rep(-1212000,2), rep(3266000,2))
+y = c(500000, 4553000, 4553000, 500000)
+coords <- data.frame(x,y)
+coordinates(coords) <- c("x","y")
+proj4string(coords) <-  CRS("+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+")
+## create spatial polygon(s)
+poly <- SpatialPolygons(list(Polygons(list(Polygon(coords)), ID="New Aus")),
+                        proj4string = CRS("+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+"))
+ind = over(murders_aus_sp, poly)
+ind[is.na(ind)] = 0
+ind = as.logical(ind)
+murders_aus_sp = murders_aus_sp[ind,]
+murders_aus_sp
+```
+
+```{r plot,results='asis',fig.width=10,fig.height=10,echo = FALSE,warning=FALSE,message=FALSE}
+plot(murders_aus_sp, col="red")
+plot(aus, add=T)
+```
+
+Homicides are clearly concentrated in specific parts of the country.
+
+
+# Queensland 
+
+```{r}
+aus2 <- raster::getData('GADM', country='AUS', level=2)
+qsld <- subset(aus2, aus2$NAME_1 == "Queensland") 
+qsld <- spTransform(qsld, "+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+")
+```
+
+```{r}
+ausdata <- ausdata[ind,]
+qsld_ind <- over(murders_aus_sp, qsld)
+qsld_data <-  ausdata[which(!is.na(qsld_ind$NAME_0)),]
+nrow(qsld_data)
+```
+
+We have 448 homicides in Queensland (over our entire time span).
+
+
+```{r}
+murders_qsld_sp <- qsld_data
+head(murders_qsld_sp)
+## project longitude & latitude to NZTMs
+coordinates(murders_qsld_sp) <- c("Longitude","Latitude")
+proj4string(murders_qsld_sp) <- CRS("+proj=longlat +datum=WGS84")
+murders_qsld_sp <-  spTransform(murders_qsld_sp, 
+                           CRS("+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+"))
+```
+
+```{r,results='asis',fig.width=10,fig.height=10,echo = FALSE,warning=FALSE,message=FALSE}
+plot(murders_qsld_sp, col="red")
+plot(qsld, add=T)
+```
+
+We want to subset the Queensland shape file to only inlcude the South-East part (includes Brisbane, Gold Coast, Sunishine Coast etc.)
+
+```{r}
+table(over(murders_qsld_sp, qsld)$NAME_2)
+```
+
+```{r, include = F}
+library(sf)
+library(raster)
+library(sp)
+a <- st_as_sf(qsld)
+qsld_proj <- st_transform(a, 4326)
+
+library(leaflet)
+leaflet(data = qsld_proj) %>%
+  addTiles() %>%
+  addPolygons(fillOpacity = 0.8, 
+                weight = 1,
+                popup = qsld_proj$NAME_2)
+```
+
+
+
+```{r,results='asis',fig.width=10,fig.height=10,echo = FALSE,warning=FALSE,message=FALSE}
+plot(murders_qsld_sp, col="red")
+plot(qsld[qsld$NAME_2 %in% c("Gold Coast", "Brisbane",  "Sunshine Coast", "Moreton Bay", "Redland", "Logan", "Ipswich", "Somerset", "Gympie"),], add=T)
+```
+
+We capture 227 murders with this small subset. Call this bris (Brisbane). 
+
+```{r}
+bris <- qsld[qsld$NAME_2 %in% c("Gold Coast", "Brisbane",  "Sunshine Coast", "Moreton Bay", "Redland", "Logan", "Ipswich"),]
+#have excluded Gympie
+bris_murders= over(murders_qsld_sp, bris)
+w = which(!is.na(bris_murders$NAME_0))
+bris_murders = murders_qsld_sp[w,]
+#we have 227 murders in this area
+
+plot(bris)
+plot(bris_murders, col="red", add=T)
+```
+
+
+# Covariates 
+
+Will use Statistical Area 1 geographies for covariates. Most SA1s have a population of between 200 to 800 persons with an average population of approximately 400 persons, so covariate values should be reflective of local area at each point.
+
+For data: https://www.abs.gov.au/AUSSTATS/abs@.nsf/DetailsPage/2033.0.55.0012016?OpenDocument
+
+```{r}
+aus_sa1 <- readOGR("sa1_2016_aust_shape/SA1_2016_AUST.shp", layer = ogrListLayers("sa1_2016_aust_shape/SA1_2016_AUST.shp"))
+aus_sa1$SA1_MAIN16 = as.numeric(aus_sa1$SA1_MAIN16)
+```
+
+Read in csv with deprivation, education scores etc.
+```{r}
+aus_sa1_dep <- read.csv("AusDepData.csv")
+aus_sa1_merged <- merge(aus_sa1, aus_sa1_dep, by.x= "SA1_MAIN16", by.y="X2016SA1Code")
+```
+
+Transform to same coordinate system as AUS. Then do over SA1 and then use this shapefile subset.
+
+```{r}
+aus_sa1 <- spTransform(aus_sa1_merged, "+proj=lcc +lat_1=-28 +lat_2=-36 +lat_0=-32 +lon_0=135 +x_0=1000000 +y_0=2000000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs 
+")
+
+aa = over(aus_sa1, bris)
+bris_sa1 <- aus_sa1[which(!is.na(aa$NAME_0)),]
+```
+
+# Mesh
+
+```{r Create mesh}
+mesh <- inla.mesh.2d(loc.domain = broom::tidy(bris_sa1)[,1:2],
+                     max.edge = c(20000,30000), cutoff = 7000)
+plot(mesh)
+```
+
+# Model - spatial only
+
+```{r, warning = F, eval=F}
+bris_fit1 <-fit_lgcp_inla(mesh = mesh, locs = coordinates(bris_murders), sp = bris_sa1,
+                     return.attributes = TRUE)
+bris_fit1$summary.fixed
+```
+
+
+```{r, eval=F}
+## expected number of murders at each mesh node
+## areas/weights at each mesh nodes, only returned if return.attribures = TRUE
+weights <- attributes(bris_fit1)$weights
+ins <- which(weights != 0)
+en <- exp(as.numeric(bris_fit1$summary.fixed[1]))*weights[ins]
+sum(en) ## expected number across area, observed 448
+```
+
+Estimated mean of the assumed Gaussian Markov Random Field
+
+```{r,message= F, warning=F, fig.width=10,fig.height=10}
+fields <- stelfi::get_fields(bris_fit1, mesh, mean = TRUE)
+grfs <- fields[[1]]
+show_field(grfs, mesh, dims = c(300,300),
+         col = RColorBrewer::brewer.pal(5, "Blues"), sp = bris_sa1,
+             rast = FALSE)
+plot(bris_murders, add = TRUE, cex = 0.2)
+
+```
+
+# Adding a covariate
+
+```{r Create covariates}
+bris_sa1$EcoDisScaled = scale(as.numeric(bris_sa1$EcoAdvDisScore))
+bris_sa1$EducScaled = scale(as.numeric(bris_sa1$EducScore))
+bris_sa1$PopDens = bris_sa1$UR.Population/bris_sa1$AREASQKM16
+bris_sa1$PopDensScaled = scale(bris_sa1$PopDens)
+```
+
+
+Covariates include Economic Disadvantage, Education and Population Density. For Education and Economic disadvantage we use scores (mean 1000) and then scale them.
+
+We will add population density as a covariate as an example. Covariates are defined at the mesh nodes (integration points inside the study region) and at the point locations. 
+
+
+```{r, eval=F}
+popdens_mesh = sp::over(SpatialPoints(mesh$loc[,1:2], proj4string = CRS(proj4string(bris_murders))), aus_sa1)$PopDensScaled
+popdens_obs = sp::over(SpatialPoints(mesh$loc[,1:2], proj4string = CRS(proj4string(bris_murders))), aus_sa1)$PopDensScaled
+
+covs = data.frame(popdens = c(popdens_mesh, popdens_obs))
+
+```
+
+
+
+```{r, eval = F}
+bris_fit2 <-fit_lgcp_inla(mesh = mesh, locs = coordinates(bris_murders), covariates = covs, sp = bris_sa1, return.attributes = TRUE)
+bris_fit2$summary.fixed
+```
+
+
+
+Estimated mean of the assumed Gaussian Markov Random Field
+
+```{r,message= F, warning=F, fig.width=10,fig.height=10, eval=F}
+fields <- stelfi::get_fields(bris_fit2, mesh, mean = TRUE)
+grfs <- fields[[1]]
+show_field(grfs, mesh, dims = c(300,300),
+         col = RColorBrewer::brewer.pal(5, "Blues"), sp = bris_sa1,
+             rast = FALSE)
+plot(bris_murders, add = TRUE, cex = 0.2)
+
+```
+
+
+
+
+
+
+
+
+
+
